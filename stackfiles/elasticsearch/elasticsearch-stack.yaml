@@ -1,0 +1,95 @@
+version: '3.2'  
+services:  
+  elasticsearch:
+    image: 'elasticsearch:5'
+    ulimits:
+      memlock: -1
+      nofile:
+        hard: 65536
+        soft: 65536
+    environment:
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    command: [ elasticsearch, -E, network.host=0.0.0.0, -E, "discovery.zen.ping.unicast.hosts=elasticsearch-master,elasticsearch,elasticsearch-client", -E, discovery.zen.minimum_master_nodes=1 ]    
+    volumes:
+      - /elasticsearch/data:/usr/share/elasticsearch/data
+    deploy:
+      mode: 'global'
+      endpoint_mode: dnsrr
+      placement:
+        constraints: [node.labels.app_role == elasticsearch]
+    healthcheck:
+      test: curl -s http://localhost:9200/_cluster/health?local=true | grep green
+      interval: 30s
+      retries: 3
+
+  elasticsearch-master:
+    image: 'elasticsearch:5'
+    ulimits:
+      memlock: -1
+      nofile:
+        hard: 65536
+        soft: 65536
+    environment:
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    command: [ elasticsearch, -E, network.host=0.0.0.0, -E, node.data=false, -E, node.master=true, -E, "discovery.zen.ping.unicast.hosts=elasticsearch,elasticsearch-master,elasticsearch-client", -E, discovery.zen.minimum_master_nodes=1 ]
+    deploy:
+      mode: 'replicated'
+      replicas: 1
+      endpoint_mode: dnsrr 
+      placement:
+        constraints: [node.labels.app_role == elasticsearch]
+    healthcheck:
+      test: curl -s http://localhost:9200/_cluster/health?local=true | grep green
+      interval: 30s
+      retries: 3
+
+  elasticsearch-client:
+    image: 'elasticsearch:5'
+    ulimits:
+      memlock: -1
+      nofile:
+        hard: 65536
+        soft: 65536
+    environment:
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    command: [ elasticsearch, -E, network.host=0.0.0.0, -E, node.data=false, -E, node.master=false, -E, "discovery.zen.ping.unicast.hosts=elasticsearch,elasticsearch-master,elasticsearch-client", -E, discovery.zen.minimum_master_nodes=1 ]
+    deploy:
+      mode: 'replicated'
+      replicas: 1
+      endpoint_mode: dnsrr 
+      placement:
+        constraints: [node.labels.app_role == elasticsearch]
+    healthcheck:
+      test: curl -s http://localhost:9200/_cluster/health?local=true | grep green
+      interval: 30s
+      retries: 3
+
+  nginx:
+    image: 'nginx:1'
+    ports:
+        - '9200:9200'
+    command: |
+      /bin/bash -c "echo '
+      server {
+        listen 9200;
+        add_header X-Frame-Options "SAMEORIGIN";
+        location / {
+            proxy_pass http://elasticsearch-client:9200;
+            proxy_http_version 1.1;
+            proxy_set_header Connection keep-alive;
+            proxy_set_header Upgrade $$http_upgrade;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Real-IP $$remote_addr;
+            proxy_cache_bypass $$http_upgrade;
+        }
+      }' | tee /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+
+volumes:
+  esdata:
+    driver: local
+
+networks:
+  elk:
+    driver: overlay
+
+
